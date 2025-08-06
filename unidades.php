@@ -137,20 +137,23 @@ switch ($method) {
                 break;
                 
             case 'regresar_ruta':
-                // Se busca la unidad por su 'num_economico'
                 $numEconomico = $data['num_economico'] ?? '';
+                $nuevoStatus = $data['status'] ?? 'Lista para Asignación'; // Se recibe el nuevo estado desde el frontend
+
                 if (empty($numEconomico)) {
-                    sendJsonResponse('error', 'El número económico es obligatorio para regresar de ruta.');
+                    sendJsonResponse('error', 'El número económico de la unidad es obligatorio.');
+                    exit();
                 }
-                $sql = "UPDATE unidades SET status = 'Lista para Asignación', ruta_asignada = NULL WHERE num_economico = ?";
-                $stmt = $conn->prepare($sql);
-                // El tipo de parámetro es 's' (string)
-                $stmt->bind_param("s", $numEconomico);
+
+                $stmt = $conn->prepare("UPDATE unidades SET status = ?, ruta_asignada = NULL, operador_id = NULL WHERE num_economico = ?");
+                $stmt->bind_param("ss", $nuevoStatus, $numEconomico);
+
                 if ($stmt->execute()) {
-                    sendJsonResponse('success', "Unidad {$numEconomico} ha regresado de la ruta.");
+                    sendJsonResponse('success', "Unidad regresada de ruta y estado actualizado a '$nuevoStatus'.");
                 } else {
-                    sendJsonResponse('error', 'Error al regresar de la ruta: ' . $stmt->error);
+                    sendJsonResponse('error', 'Error al actualizar la unidad: ' . $stmt->error);
                 }
+
                 $stmt->close();
                 break;
 

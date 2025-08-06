@@ -3,11 +3,73 @@
 // Almacena la lista de operadores para facilitar la edición
 let operadores = [];
 
+// Base URL para tus scripts PHP. ¡AJUSTA ESTA RUTA SI ES NECESARIO!
+const API_BASE_URL = 'http://localhost/UnidadesC/'; 
+
 // Funciones para cargar datos al inicio
 document.addEventListener('DOMContentLoaded', () => {
     cargarUnidades();
     cargarOperadores();
 });
+
+
+// --- Funciones Auxiliares para la API ---
+
+/**
+ * Función genérica para enviar datos (POST, PUT, DELETE) a la API.
+ * @param {string} url - La URL del endpoint de la API.
+ * @param {string} method - El método HTTP ('POST', 'PUT', 'DELETE').
+ * @param {Object} data - Los datos a enviar en el cuerpo de la petición.
+ * @returns {Promise<Object>} - La respuesta de la API en formato JSON.
+ */
+async function sendData(url, method, data) {
+    try {
+        const options = {
+            method: method,
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(data)
+        };
+        const response = await fetch(url, options);
+        const result = await response.json();
+
+        // Manejo de errores genérico del servidor
+        if (!response.ok) {
+            console.error('Error de servidor:', result.message || 'Error desconocido');
+            return { status: 'error', message: result.message || 'Error desconocido' };
+        }
+        
+        return result;
+    } catch (error) {
+        console.error(`Error en la petición ${method} a ${url}:`, error);
+        return { status: 'error', message: 'Error de conexión. Revisa la consola para más detalles.' };
+    }
+}
+
+/**
+ * Función genérica para obtener datos (GET) de la API.
+ * @param {string} url - La URL del endpoint de la API, incluyendo parámetros de búsqueda.
+ * @returns {Promise<Array<Object>|Object>} - La respuesta de la API.
+ */
+async function fetchData(url) {
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            return data.data;
+        } else {
+            console.error('Error al obtener datos:', data.message);
+            return [];
+        }
+    } catch (error) {
+        console.error('Error en la petición GET:', error);
+        return [];
+    }
+}
+
+
 
 // =========================================================================
 // GESTIÓN DE UNIDADES
@@ -175,14 +237,30 @@ function asignarRuta() {
 
 function regresarDeRuta() {
     const unidadId = prompt('Ingrese el número económico de la unidad que regresa de ruta:');
-    if (!unidadId) return;
+    if (!unidadId) {
+        return;
+    }
 
-    fetch('unidades.php', {
+    // Pregunta al usuario si la unidad requiere mantenimiento
+    const necesitaMantenimiento = confirm('¿La unidad necesita mantenimiento?');
+
+    let nuevoStatus;
+    if (necesitaMantenimiento) {
+        nuevoStatus = 'En Mantenimiento';
+    } else {
+        nuevoStatus = 'Lista para Asignación';
+    }
+
+    // Se actualiza el estado de la unidad en el backend
+    fetch(API_BASE_URL + 'unidades.php', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-            action: 'regresar_ruta', 
-            num_economico: unidadId
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            action: 'regresar_ruta',
+            num_economico: unidadId,
+            status: nuevoStatus // Enviamos el nuevo estado al servidor
         })
     })
     .then(response => response.json())
@@ -191,7 +269,8 @@ function regresarDeRuta() {
         if (data.status === 'success') {
             cargarUnidades();
         }
-    });
+    })
+    .catch(error => console.error('Error:', error));
 }
 
 function eliminarUnidad() {
@@ -355,75 +434,106 @@ function eliminarOperador(operadorId) {
 // GESTIÓN DE ÓRDENES DE TRABAJO
 // =========================================================================
 
-function crearOrdenTrabajo() {
-    const otUnidadId = document.getElementById('otUnidadId').value;
-    const otOperadorId = document.getElementById('otOperadorId').value;
-    const otTipoMantenimiento = document.getElementById('otTipoMantenimiento').value;
-    const otDescripcion = document.getElementById('otDescripcion').value;
+async function crearOrdenDeTrabajo() {
+    // Referencias a los elementos del formulario
+    const otUnidadIdSelect = document.getElementById('otUnidadId');
+    const otOperadorIdSelect = document.getElementById('otOperadorId');
+    const otTipoMantenimientoInput = document.getElementById('otTipoMantenimiento');
+    const otDescripcionTextarea = document.getElementById('otDescripcion');
 
-    if (!otUnidadId || !otTipoMantenimiento || !otDescripcion) {
-        alert('Por favor, complete los campos de unidad, tipo y descripción.');
+    // Obtener los valores del formulario
+    const unidadId = otUnidadIdSelect.value; // ¡Ya no se convierte a entero!
+    const operadorId = otOperadorIdSelect.value;
+    const tipoMantenimiento = otTipoMantenimientoInput.value.trim();
+    const descripcion = otDescripcionTextarea.value.trim();
+
+    // Validar que los campos obligatorios no estén vacíos
+    if (!unidadId || !tipoMantenimiento || !descripcion) {
+        alert("❌ Error: ID de unidad, tipo de mantenimiento y descripción son obligatorios.");
         return;
     }
 
-    fetch('ordenes.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            action: 'crear',
-            unidad_id: otUnidadId,
-            operador_id: otOperadorId || null,
-            tipo_mantenimiento: otTipoMantenimiento,
-            descripcion: otDescripcion,
-            fecha_inicio: new Date().toISOString().slice(0, 10)
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        alert(data.message);
-        if (data.status === 'success') {
-            document.getElementById('otTipoMantenimiento').value = '';
-            document.getElementById('otDescripcion').value = '';
-            cargarOrdenesDeUnidad(otUnidadId);
-        }
-    });
+    // Crear el objeto de datos para enviar
+    const data = {
+        unidad_id: unidadId, // Enviamos el ID de la unidad como string
+        operador_id: operadorId ? parseInt(operadorId) : null,
+        tipo_mantenimiento: tipoMantenimiento,
+        descripcion: descripcion
+    };
+
+    // Enviar los datos al servidor usando la función sendData
+    const response = await sendData(`${API_BASE_URL}ordenes_trabajo.php`, 'POST', data);
+
+    if (response.status === 'success') {
+        alert("✅ " + response.message);
+        otUnidadIdSelect.value = '';
+        otOperadorIdSelect.value = '';
+        otTipoMantenimientoInput.value = '';
+        otDescripcionTextarea.value = '';
+    } else {
+        alert("❌ Error: " + response.message);
+    }
 }
 
-function cargarOrdenesDeUnidad(unidadNumEconomico) {
+async function cargarOrdenesDeUnidad(unidadNumEconomico) {
     const ordenesTrabajoList = document.getElementById('ordenesTrabajoList');
-    ordenesTrabajoList.innerHTML = '';
-    
-    fetch(`ordenes.php?unidad_id=${unidadNumEconomico}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                mostrarOrdenesTrabajo(data.data);
-            } else {
-                console.error('Error al cargar órdenes de trabajo:', data.message);
-            }
-        });
+    ordenesTrabajoList.innerHTML = ''; // Limpiamos la lista antes de cargar
+
+    if (!unidadNumEconomico) {
+        ordenesTrabajoList.innerHTML = '<div>Selecciona una unidad para ver sus órdenes.</div>';
+        return;
+    }
+
+    try {
+        // Corregimos la URL para que apunte al archivo correcto 'ordenes_trabajo.php'
+        const response = await fetch(`${API_BASE_URL}ordenes_trabajo.php?unidad_id=${unidadNumEconomico}`);
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            mostrarOrdenesTrabajo(data.data);
+        } else {
+            console.error('Error al cargar órdenes de trabajo:', data.message);
+            ordenesTrabajoList.innerHTML = `<div>Error al cargar órdenes: ${data.message}</div>`;
+        }
+    } catch (error) {
+        console.error('Error en la petición de órdenes:', error);
+        ordenesTrabajoList.innerHTML = `<div>Error de conexión. Revisa la consola.</div>`;
+    }
 }
 
 function mostrarOrdenesTrabajo(ordenes) {
     const ordenesTrabajoList = document.getElementById('ordenesTrabajoList');
+    ordenesTrabajoList.innerHTML = '';
+    
     if (ordenes.length === 0) {
         ordenesTrabajoList.innerHTML = '<div>No hay órdenes de trabajo para esta unidad.</div>';
         return;
     }
+
     ordenes.forEach(orden => {
         const ordenItem = document.createElement('div');
         ordenItem.className = 'orden-item';
+        let operadorInfo = 'N/A';
+        if (orden.operador_nombre) {
+            operadorInfo = `${orden.operador_nombre} ${orden.apellido_paterno || ''}`;
+        }
+
         ordenItem.innerHTML = `
             <div>
-                <strong>OT #${orden.id}</strong> - Tipo: ${orden.tipo_mantenimiento}<br>
-                Descripción: ${orden.descripcion}<br>
-                Estado: ${orden.estado}<br>
-                Fecha de Inicio: ${orden.fecha_inicio}
+                <strong>OT ID:</strong> ${orden.id}<br>
+                <strong>Unidad:</strong> ${orden.num_economico} (Placas: ${orden.placas})<br>
+                <strong>Operador que reporta:</strong> ${operadorInfo}<br>
+                <strong>Tipo:</strong> ${orden.tipo_mantenimiento}<br>
+                <strong>Descripción:</strong> ${orden.descripcion}<br>
+                <strong>Fecha Inicio:</strong> ${orden.fecha_inicio}<br>
+                <strong>Estado:</strong> ${orden.estado}<br>
+                ${orden.fecha_fin ? `<strong>Fecha Fin:</strong> ${orden.fecha_fin}<br>` : ''}
             </div>
         `;
         ordenesTrabajoList.appendChild(ordenItem);
     });
 }
+
 // =========================================================================
 // EVENTOS DE BOTONES
 // =========================================================================
@@ -534,7 +644,8 @@ document.getElementById('btnAsignarOperadorAUnidad').addEventListener('click', (
     });
 });
 
-document.getElementById('btnCrearOrdenTrabajo').addEventListener('click', crearOrdenTrabajo);
+
+document.getElementById('btnCrearOrdenTrabajo').addEventListener('click', crearOrdenDeTrabajo);
 
 document.getElementById('btnVerOrdenesUnidad').addEventListener('click', () => {
     const unidadNumEconomico = document.getElementById('selectUnidadVerOT').value;

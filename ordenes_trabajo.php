@@ -1,103 +1,92 @@
 <?php
-// ordenes_trabajo.php
-require_once 'db_config.php';
+// Inicia el búfer de salida. Esto capturará cualquier salida inesperada.
+ob_start();
 
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Content-Type: application/json');
+header("Access-Control-Allow-Origin: *");
+header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
+header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+// Si la petición es de tipo OPTIONS, respondemos con éxito y terminamos
+if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
+    http_response_code(200);
+    ob_end_clean(); // Limpia el búfer y lo desactiva
     exit();
+}
+
+// Función para enviar una respuesta JSON y terminar el script
+function sendJsonResponse($status, $message, $data = null) {
+    ob_end_clean(); // ¡Importante! Limpia cualquier salida inesperada
+    $response = ['status' => $status, 'message' => $message, 'data' => $data];
+    echo json_encode($response);
+    exit();
+}
+
+// Configuración de la base de datos
+$servername = "localhost";
+$username = "root";
+$password = "";
+$dbname = "taller";
+
+// Crear conexión
+$conn = new mysqli($servername, $username, $password, $dbname);
+
+// Verificar la conexión
+if ($conn->connect_error) {
+    sendJsonResponse('error', 'Error en la conexión a la base de datos: ' . $conn->connect_error);
 }
 
 $method = $_SERVER['REQUEST_METHOD'];
 
 switch ($method) {
     case 'GET':
-        // Leer órdenes de trabajo
-        // El 'unidad_id' ahora es el 'num_economico'
-        $unidadNumEconomico = $_GET['unidad_id'] ?? '';
-        $otId = intval($_GET['id'] ?? 0); 
-
-        $sql = "SELECT ot.*, u.num_economico, u.placas,
-                        op.nombre AS operador_nombre, IFNULL(op.apellido_paterno, '') AS operador_apellido_paterno
-                FROM ordenes_trabajo ot
-                -- La unión ahora se hace usando el 'num_economico'
-                JOIN unidades u ON ot.unidad_id = u.num_economico
-                LEFT JOIN operadores op ON ot.operador_id = op.id";
-        
-        $params = [];
-        $types = "";
-
-        if ($otId > 0) {
-             $sql .= " WHERE ot.id = ?";
-             $params[] = $otId;
-             $types .= "i";
-        } elseif (!empty($unidadNumEconomico)) {
-            // El filtro ahora se hace con el 'num_economico' que es un string
-            $sql .= " WHERE ot.unidad_id = ?";
-            $params[] = $unidadNumEconomico;
-            $types .= "s";
+    $unidadNumEconomico = $_GET['unidad_id'] ?? null;
+    if ($unidadNumEconomico) {
+        $stmt = $conn->prepare("SELECT ot.*, u.num_economico, u.placas, o.nombre AS operador_nombre, o.apellido_paterno
+                                FROM ordenes_trabajo ot
+                                JOIN unidades u ON ot.unidad_id = u.num_economico
+                                LEFT JOIN operadores o ON ot.operador_id = o.id
+                                WHERE u.num_economico = ?");
+        if ($stmt === false) {
+            sendJsonResponse('error', 'Error en la preparación de la consulta GET: ' . $conn->error);
         }
-        $sql .= " ORDER BY ot.fecha_inicio DESC, ot.id DESC";
-        
-        $stmt = $conn->prepare($sql);
-        
-        if (!empty($params)) {
-            $bind_params = [];
-            $bind_params[] = &$types;
-            for ($i = 0; $i < count($params); $i++) {
-                $bind_params[] = &$params[$i];
-            }
-            call_user_func_array([$stmt, 'bind_param'], $bind_params);
-        }
-        
+        $stmt->bind_param("s", $unidadNumEconomico);
         $stmt->execute();
         $result = $stmt->get_result();
-
-        $ordenes = [];
-        if ($result->num_rows > 0) {
-            while ($row = $result->fetch_assoc()) {
-                $ordenes[] = $row;
-            }
-        }
-        sendJsonResponse('success', 'Órdenes de trabajo obtenidas', $ordenes);
+        $data = $result->fetch_all(MYSQLI_ASSOC);
+        sendJsonResponse('success', 'Órdenes de trabajo obtenidas con éxito.', $data);
         $stmt->close();
-        break;
+    } else {
+        sendJsonResponse('error', 'El parámetro "unidad_id" es obligatorio para las consultas GET.');
+    }
+    break;
 
-    case 'POST':
-        // Crear orden de trabajo
-        $data = json_decode(file_get_contents("php://input"), true);
-        // El 'unidad_id' ya no se convierte a entero
-        $unidadId = $data['unidad_id'] ?? ''; 
-        $operadorId = null;
-        if (isset($data['operador_id']) && $data['operador_id'] !== '') {
-            $operadorId = intval($data['operador_id']);
-        }
-        $tipoMantenimiento = $data['tipo_mantenimiento'] ?? '';
-        $descripcion = $data['descripcion'] ?? '';
-        $fechaInicio = $data['fecha_inicio'] ?? date('Y-m-d');
-        $estado = 'Pendiente';
+case 'POST':
+    $data = json_decode(file_get_contents("php://input"), true);
+    
+    $unidadNumEconomico = $data['unidad_id'] ?? '';
+    $operadorId = $data['operador_id'] ?? null;
+    $tipoMantenimiento = $data['tipo_mantenimiento'] ?? ''; 
+    $descripcion = $data['descripcion'] ?? '';
+    $fechaInicio = date('Y-m-d');
+    $estado = 'Pendiente';
 
-        if (empty($unidadId) || empty($tipoMantenimiento) || empty($descripcion)) {
-            sendJsonResponse('error', 'Datos incompletos.');
-        }
+    if (empty($unidadNumEconomico) || empty($tipoMantenimiento) || empty($descripcion)) {
+        sendJsonResponse('error', 'El número económico de la unidad, el tipo de mantenimiento y la descripción son obligatorios.');
+    }
+    
+    $stmt = $conn->prepare("INSERT INTO ordenes_trabajo (unidad_id, operador_id, tipo_mantenimiento, descripcion, fecha_inicio, estado) VALUES (?, ?, ?, ?, ?, ?)");
+    $stmt->bind_param("sissss", $unidadNumEconomico, $operadorId, $tipoMantenimiento, $descripcion, $fechaInicio, $estado);
 
-        $sql = "INSERT INTO ordenes_trabajo (unidad_id, operador_id, tipo_mantenimiento, descripcion, fecha_inicio, estado) VALUES (?, ?, ?, ?, ?, ?)";
-        $stmt = $conn->prepare($sql);
-        // El tipo de parámetro para 'unidad_id' es 's' (string)
-        $stmt->bind_param("sissss", $unidadId, $operadorId, $tipoMantenimiento, $descripcion, $fechaInicio, $estado);
-
-        if ($stmt->execute()) {
-            sendJsonResponse('success', 'Orden de trabajo creada correctamente.', ['id' => $conn->insert_id]);
-        } else {
-            sendJsonResponse('error', 'Error al crear la orden de trabajo: ' . $stmt->error);
-        }
-        $stmt->close();
-        break;
+    if ($stmt->execute()) {
+        sendJsonResponse('success', 'Orden de trabajo creada con éxito.', ['id' => $conn->insert_id]);
+    } else {
+        sendJsonResponse('error', 'Error al crear la orden de trabajo: ' . $stmt->error);
+    }
+    break;
 
     default:
-        sendJsonResponse('error', 'Método no permitido.');
+        sendJsonResponse('error', 'Método no soportado.');
         break;
 }
 
